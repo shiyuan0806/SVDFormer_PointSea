@@ -88,9 +88,10 @@ python main_*.py (pcn/55)
   title={PointSea: Point Cloud Completion via Self-structure Augmentation},
   author={Zhu, Zhe and Chen, Honghua and He, Xing and Wei, Mingqiang},
   journal={International Journal of Computer Vision},
-  pages={1--25},
-  year={2025},
-  publisher={Springer}
+  volume={133},
+  number={7},
+  pages={4770--4794},
+  year={2025}
 }
 ```
 
