@@ -9,13 +9,14 @@ from models.model_utils import *
 from metrics.CD.chamfer3D.dist_chamfer_3D import chamfer_3DDist
 
 class FeatureExtractor(nn.Module):
-    def __init__(self, out_dim=256):
+    def __init__(self, out_dim=256, use_pcsa=True):
         """Encoder that encodes information of partial point cloud
         """
         super(FeatureExtractor, self).__init__()
-        self.sa_module_1 = PointNet_SA_Module_KNN(512, 16, 3, [64, 128], group_all=False, if_bn=False, if_idx=True)
-        self.sa_module_2 = PointNet_SA_Module_KNN(128, 16, 128, [128, 256], group_all=False, if_bn=False, if_idx=True)
-        self.sa_module_3 = PointNet_SA_Module_KNN(None, None, 256, [512, out_dim], group_all=True, if_bn=False)
+        # Enable PCSA for local groups, keep global unchanged
+        self.sa_module_1 = PointNet_SA_Module_KNN(512, 16, 3, [64, 128], group_all=False, if_bn=False, if_idx=True, use_pcsa=use_pcsa)
+        self.sa_module_2 = PointNet_SA_Module_KNN(128, 16, 128, [128, 256], group_all=False, if_bn=False, if_idx=True, use_pcsa=use_pcsa)
+        self.sa_module_3 = PointNet_SA_Module_KNN(None, None, 256, [512, out_dim], group_all=True, if_bn=False, use_pcsa=False)
 
     def forward(self, point_cloud):
         """
@@ -92,7 +93,7 @@ class SVFNet(nn.Module):
     def __init__(self, cfg):
         super(SVFNet, self).__init__()
         self.channel = 64
-        self.point_feature_extractor = FeatureExtractor()
+        self.point_feature_extractor = FeatureExtractor(use_pcsa=getattr(cfg.NETWORK, 'USE_PCSA', True))
         self.view_distance = cfg.NETWORK.view_distance
         self.relu = nn.GELU()
         self.sa = self_attention(self.channel*8,self.channel*8,dropout=0.0)

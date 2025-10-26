@@ -355,8 +355,82 @@ def sample_and_group_knn(xyz, points, npoint, k, use_xyz=True, idx=None):
 
     return new_xyz, new_points, idx, grouped_xyz
 
+class PCSA(nn.Module):
+    """Point Cloud Spectral Adapter (PCSA)
+    A lightweight spectral gating along local neighborhood dimension.
+
+    - Uses orthonormal DCT-II basis to approximate spectral transform per local patch
+    - Learns data-dependent frequency gates via a tiny MLP on frequency responses
+    - Returns filtered features back in spatial domain via IDCT (= DCT^T)
+
+    Expected input shape: (B, C, S, K) where K is neighborhood size
+    """
+
+    def __init__(self, channels: int, k_neighbors: int):
+        super().__init__()
+        self.channels = channels
+        self.k = k_neighbors if k_neighbors is not None else 0
+        if self.k and self.k > 0:
+            hidden = max(8, self.k // 2)
+            self.freq_mlp = nn.Sequential(
+                nn.Linear(self.k, hidden),
+                nn.GELU(),
+                nn.Linear(hidden, self.k),
+                nn.Sigmoid(),
+            )
+            # DCT basis buffers are initialized lazily to current device/dtype
+            self.register_buffer('_dct_basis', torch.empty(0), persistent=False)
+            self.register_buffer('_idct_basis', torch.empty(0), persistent=False)
+        else:
+            self.freq_mlp = None
+            self.register_buffer('_dct_basis', torch.empty(0), persistent=False)
+            self.register_buffer('_idct_basis', torch.empty(0), persistent=False)
+
+    @staticmethod
+    def _create_ortho_dct(n: int, device, dtype):
+        # Orthonormal DCT-II matrix of size n x n
+        x = torch.arange(n, device=device, dtype=dtype).view(1, -1)
+        u = torch.arange(n, device=device, dtype=dtype).view(-1, 1)
+        pi = torch.tensor(np.pi, device=device, dtype=dtype)
+        mat = torch.cos((pi / n) * (x + 0.5) * u)
+        mat *= (2.0 / n) ** 0.5
+        mat[0, :] *= (0.5) ** 0.5  # c0 = 1/sqrt(2)
+        return mat  # orthonormal, so IDCT = mat^T
+
+    def _ensure_bases(self, device, dtype):
+        if self.k == 0:
+            return
+        if self._dct_basis.numel() == 0 or self._dct_basis.shape[0] != self.k or self._dct_basis.device != device or self._dct_basis.dtype != dtype:
+            dct = self._create_ortho_dct(self.k, device, dtype)
+            self._dct_basis = dct
+            self._idct_basis = dct.transpose(0, 1).contiguous()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, C, S, K)
+        if self.k == 0 or self.freq_mlp is None:
+            return x
+        B, C, S, K = x.shape
+        self._ensure_bases(x.device, x.dtype)
+        # reshape to (B*C*S, K)
+        x_flat = x.permute(0, 2, 1, 3).contiguous().view(B * S * C, K)
+        # spectral transform
+        X_spec = torch.matmul(x_flat, self._dct_basis.t())  # (B*C*S, K)
+        # frequency gating conditioned on averaged channels per patch
+        # compute gates per (B, S) instance; average across channels
+        x_for_gate = x.mean(dim=1)  # (B, S, K)
+        gates = self.freq_mlp(x_for_gate)  # (B, S, K)
+        gates = gates.view(B * S, K)
+        # expand gates over channels
+        gates = gates.unsqueeze(1).repeat(1, C, 1).view(B * S * C, K)
+        X_spec = X_spec * gates
+        # inverse transform
+        x_spatial = torch.matmul(X_spec, self._idct_basis.t())  # (B*C*S, K)
+        x_spatial = x_spatial.view(B, S, C, K).permute(0, 2, 1, 3).contiguous()
+        return x_spatial
+
+
 class PointNet_SA_Module_KNN(nn.Module):
-    def __init__(self, npoint, nsample, in_channel, mlp, if_bn=True, group_all=False, use_xyz=True, if_idx=False):
+    def __init__(self, npoint, nsample, in_channel, mlp, if_bn=True, group_all=False, use_xyz=True, if_idx=False, use_pcsa=False):
         """
         Args:
             npoint: int, number of points to sample
@@ -372,6 +446,7 @@ class PointNet_SA_Module_KNN(nn.Module):
         self.group_all = group_all
         self.use_xyz = use_xyz
         self.if_idx = if_idx
+        self.use_pcsa = use_pcsa
         if use_xyz:
             in_channel += 3
 
@@ -382,6 +457,8 @@ class PointNet_SA_Module_KNN(nn.Module):
             last_channel = out_channel
         self.mlp_conv.append(Conv2d(last_channel, mlp[-1], if_bn=False, activation_fn=None))
         self.mlp_conv = nn.Sequential(*self.mlp_conv)
+        # Spectral adapter for local groups (disabled for global grouping)
+        self.pcsa = PCSA(mlp[-1], nsample) if (not group_all and use_pcsa) else None
 
     def forward(self, xyz, points, idx=None):
         """
@@ -399,6 +476,9 @@ class PointNet_SA_Module_KNN(nn.Module):
             new_xyz, new_points, idx, grouped_xyz = sample_and_group_knn(xyz, points, self.npoint, self.nsample, self.use_xyz, idx=idx)
 
         new_points = self.mlp_conv(new_points)
+        if self.pcsa is not None:
+            # Apply spectral filtering along neighborhood dimension
+            new_points = self.pcsa(new_points)
         new_points = torch.max(new_points, 3)[0]
 
         if self.if_idx:

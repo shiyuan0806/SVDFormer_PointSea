@@ -56,6 +56,7 @@ __C.NETWORK.step2                    = 4
 __C.NETWORK.merge_points = 1024
 __C.NETWORK.local_points = 1024
 __C.NETWORK.view_distance = 1.5
+__C.NETWORK.USE_PCSA = True
 
 #
 # Train
@@ -71,6 +72,13 @@ __C.TRAIN.WARMUP_STEPS                          = 300
 __C.TRAIN.GAMMA                                  = .98
 __C.TRAIN.BETAS                                  = (.9, .999)
 __C.TRAIN.WEIGHT_DECAY                           = 0
+
+# Adversarial training options
+__C.TRAIN.ADV                                     = edict()
+__C.TRAIN.ADV.ENABLED                             = False
+__C.TRAIN.ADV.LAMBDA_G                            = 0.05
+__C.TRAIN.ADV.D_LR                                = 0.0001
+__C.TRAIN.ADV.D_STEPS                             = 1
 #
 # Test
 #
