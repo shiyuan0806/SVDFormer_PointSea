@@ -71,6 +71,30 @@ __C.NETWORK.hidden_dim_stage1 = 768   # Hidden dimension for stage 1 DRSN
 __C.NETWORK.hidden_dim_stage2 = 512   # Hidden dimension for stage 2 DRSN
 
 #
+# GAN (Self-supervised Structural Consistency Training)
+#
+__C.GAN = edict()
+__C.GAN.ENABLED = False          # Enable GAN training
+__C.GAN.WARMUP_GAN_EPOCHS = 50   # Train generator only for first N epochs
+
+# Discriminator settings
+__C.GAN.DISC_TYPE = 'local_global'  # Discriminator type: 'simple', 'local_global', 'spectral'
+__C.GAN.DISC_HIDDEN_DIM = 256       # Hidden dimension for discriminator
+__C.GAN.DISC_LEARNING_RATE = 0.0001 # Learning rate for discriminator
+__C.GAN.DISC_UPDATE_FREQ = 2        # Update discriminator every N batches (slower than generator)
+
+# GAN loss settings
+__C.GAN.GAN_MODE = 'lsgan'       # GAN loss type: 'vanilla', 'lsgan', 'wgan'
+__C.GAN.GAN_WEIGHT = 0.1         # Weight for GAN loss
+
+# Structural consistency settings
+__C.GAN.USE_PARTIAL_MATCHING = True   # Use partial matching loss
+__C.GAN.USE_CONSISTENCY = True        # Use consistency loss
+__C.GAN.PARTIAL_MATCHING_WEIGHT = 1.0 # Weight for partial matching loss
+__C.GAN.CONSISTENCY_WEIGHT = 0.5      # Weight for consistency loss
+__C.GAN.PARTIAL_MATCHING_THRESHOLD = 0.05  # Distance threshold for partial matching
+
+#
 # Training
 #
 __C.TRAIN = edict()

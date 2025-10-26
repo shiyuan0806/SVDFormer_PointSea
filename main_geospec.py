@@ -17,6 +17,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config_geospec import cfg
 from core.train_geospec import train_net
+from core.train_geospec_gan import train_net_with_gan
 from core.eval_geospec import eval_net
 
 
@@ -81,6 +82,15 @@ def parse_args():
     # Output directory
     parser.add_argument('--output', type=str, default=None,
                         help='Output directory for checkpoints and logs')
+    
+    # GAN training
+    parser.add_argument('--use_gan', action='store_true',
+                        help='Use GAN for self-supervised structural consistency training')
+    parser.add_argument('--disc_type', type=str, default=None,
+                        choices=['simple', 'local_global', 'spectral'],
+                        help='Discriminator type for GAN training')
+    parser.add_argument('--gan_weight', type=float, default=None,
+                        help='Weight for GAN loss')
     
     # Random seed
     parser.add_argument('--seed', type=int, default=42,
@@ -154,6 +164,14 @@ def update_config(args):
         cfg.DATASET.TRAIN_DATASET = args.train_dataset
     if args.test_dataset:
         cfg.DATASET.TEST_DATASET = args.test_dataset
+    
+    # GAN settings
+    if args.use_gan:
+        cfg.GAN.ENABLED = True
+    if args.disc_type:
+        cfg.GAN.DISC_TYPE = args.disc_type
+    if args.gan_weight:
+        cfg.GAN.GAN_WEIGHT = args.gan_weight
 
 
 def print_config():
@@ -212,7 +230,11 @@ def main():
     # Run the appropriate mode
     if args.mode == 'train':
         logging.info('Starting training...')
-        train_net(cfg)
+        if cfg.GAN.ENABLED:
+            logging.info('Using GAN for self-supervised structural consistency training')
+            train_net_with_gan(cfg)
+        else:
+            train_net(cfg)
         logging.info('Training completed!')
         
     elif args.mode == 'eval':
