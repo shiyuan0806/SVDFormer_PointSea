@@ -18,6 +18,34 @@ from models.model_utils import PCViews
 from models.SVDFormer import Model
 
 
+class SimplePointDiscriminator(torch.nn.Module):
+    """A lightweight discriminator operating on point sets.
+    It embeds points with shared MLP and aggregates via max-pool, then classifies.
+    """
+    def __init__(self, in_dim: int = 3, hidden: int = 128):
+        super().__init__()
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Conv1d(in_dim, hidden, 1),
+            torch.nn.LeakyReLU(0.2, inplace=True),
+            torch.nn.Conv1d(hidden, hidden, 1),
+            torch.nn.LeakyReLU(0.2, inplace=True),
+            torch.nn.Conv1d(hidden, hidden, 1),
+        )
+        self.head = torch.nn.Sequential(
+            torch.nn.Linear(hidden, hidden),
+            torch.nn.LeakyReLU(0.2, inplace=True),
+            torch.nn.Linear(hidden, 1)
+        )
+
+    def forward(self, x):
+        # x: (B, N, 3)
+        x = x.transpose(1, 2).contiguous()
+        f = self.mlp(x)  # (B, C, N)
+        g = torch.max(f, dim=2, keepdim=False)[0]  # (B, C)
+        logits = self.head(g)
+        return logits
+
+
 def train_net(cfg):
     torch.backends.cudnn.benchmark = True
 
@@ -84,6 +112,15 @@ def train_net(cfg):
 
         logging.info('Recover complete.')
 
+    # Optional adversarial training components
+    adv_enabled = getattr(cfg.TRAIN, 'ADV', None) is not None and cfg.TRAIN.ADV.ENABLED
+    if adv_enabled:
+        dis = SimplePointDiscriminator()
+        if torch.cuda.is_available():
+            dis = torch.nn.DataParallel(dis).cuda()
+        d_opt = torch.optim.Adam(dis.parameters(), lr=cfg.TRAIN.ADV.D_LR, betas=cfg.TRAIN.BETAS)
+        bce_logits = torch.nn.BCEWithLogitsLoss()
+
     # Training/Testing the network
     for epoch_idx in range(init_epoch + 1, cfg.TRAIN.N_EPOCHS + 1):
         epoch_start_time = time()
@@ -115,6 +152,28 @@ def train_net(cfg):
                 pcds_pred = model(partial,partial_depth)
 
                 loss_total, losses = get_loss_PM(pcds_pred, partial, gt, sqrt=False)
+
+                if adv_enabled:
+                    Pc, P1, P2 = pcds_pred
+                    # Train discriminator D steps
+                    for _ in range(cfg.TRAIN.ADV.D_STEPS):
+                        dis.train()
+                        d_opt.zero_grad()
+                        with torch.no_grad():
+                            fake_pts = P2.detach()  # (B, N, 3)
+                        real_logits = dis(gt)
+                        fake_logits = dis(fake_pts)
+                        d_loss_real = bce_logits(real_logits, torch.ones_like(real_logits))
+                        d_loss_fake = bce_logits(fake_logits, torch.zeros_like(fake_logits))
+                        d_loss = (d_loss_real + d_loss_fake) * 0.5
+                        d_loss.backward()
+                        d_opt.step()
+
+                    # Generator adversarial loss
+                    dis.eval()
+                    fake_logits_g = dis(P2)
+                    g_adv = bce_logits(fake_logits_g, torch.ones_like(fake_logits_g))
+                    loss_total = loss_total + cfg.TRAIN.ADV.LAMBDA_G * g_adv
 
                 optimizer.zero_grad()
                 loss_total.backward()
